@@ -53,7 +53,8 @@ export default function TaimiMascot({
     return () => window.clearTimeout(timer);
   }, [clickedHappy]);
 
-  const bubbleLabel = quip || statusText || (activeMood === "thinking" ? "Ajattelen..." : "");
+  const bubbleLabel =
+    quip || statusText || (activeMood === "thinking" ? "Ajattelen..." : "");
 
   return (
     <div className={`taimi-wrapper mood-${activeMood}`}>
