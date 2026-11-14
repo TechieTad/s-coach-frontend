@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createCoachApi, type CoachApi } from "@/lib/api";
 import type { ChatMessage, PartText, WireTurn } from "@/lib/types";
 import MessageBubble from "./MessageBubble";
@@ -8,149 +8,296 @@ import SuggestionChips from "./SuggestionChips";
 
 let nextId = 1;
 
+const STORAGE_KEY = "scoach.customer_id";
+const DEMO_IDS = ["CUST00003", "CUST00007", "CUST00042", "CUST00123"];
+
 const WELCOME: ChatMessage = {
-  id: "welcome",
-  role: "assistant",
-  ts: 0,
-  parts: [
-    {
-      type: "text",
-      text: "Hei! I'm **S-Coach** 👋 your personal economic trainer.\nI can see your own (synthetic demo) transaction data and answer questions about it — try the chips below, or ask in your own words.",
-    },
-  ],
+ id: "welcome",
+ role: "assistant",
+ ts: 0,
+ parts: [
+ {
+ type: "text",
+ text: "Hei! I'm **S-Coach** 👋 your personal economic trainer.\nI can see your own (synthetic demo) transaction data and answer questions about it — try the chips below, or ask in your own words.",
+ },
+ ],
 };
 
+/** Accept "CUST00042", "00042" or "42" → "CUST00042"; reject anything outside the demo range. */
+function normalizeCustomerId(raw: string): string | null {
+ let s = raw.trim().toUpperCase().replace(/\s+/g, "");
+ if (/^\d{1,5}$/.test(s)) s = "CUST" + s.padStart(5, "0");
+ if (!/^CUST\d{5}$/.test(s)) return null;
+ const n = parseInt(s.slice(4), 10);
+ if (n < 1 || n > 5100) return null;
+ return s;
+}
+
+function readSavedCustomer(): string | null {
+ if (typeof window === "undefined") return null;
+ try {
+ return window.localStorage.getItem(STORAGE_KEY);
+ } catch {
+ return null;
+ }
+}
+
 export default function ChatApp() {
-  const api = useMemo<CoachApi>(() => createCoachApi(), []);
-  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
-  const [input, setInput] = useState("");
-  const [typing, setTyping] = useState(false);
-  const [, setTick] = useState(0); // re-render after multi-bank account toggles
-  const scrollRef = useRef<HTMLDivElement>(null);
+ const [customerId, setCustomerId] = useState<string | null>(null);
+ const [ready, setReady] = useState(false);
+ const [showLogin, setShowLogin] = useState(false);
+ const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
+ const [input, setInput] = useState("");
+ const [typing, setTyping] = useState(false);
+ const [, setTick] = useState(0); // re-render after multi-bank account toggles
+ const scrollRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    requestAnimationFrame(() => {
-      const el = scrollRef.current;
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    });
-  };
+ // Hydrate the saved login after mount (avoids SSR/localStorage mismatch).
+ useEffect(() => {
+ setCustomerId(readSavedCustomer());
+ setReady(true);
+ }, []);
 
-  const send = (raw: string) => {
-    const text = raw.trim();
-    if (!text || typing) return;
-    const userMsg: ChatMessage = {
-      id: `m${nextId++}`,
-      role: "user",
-      ts: Date.now(),
-      parts: [{ type: "text", text }],
-    };
-    setMessages((m) => [...m, userMsg]);
-    setInput("");
-    setTyping(true);
-    scrollToBottom();
-    // The real backend is stateless, so send the recent transcript along.
-    const history: WireTurn[] = messages
-      .filter((m) => m.id !== "welcome")
-      .map((m) => ({
-        role: m.role,
-        content: m.parts
-          .filter((p) => p.type === "text")
-          .map((p) => (p as PartText).text)
-          .join(" "),
-      }));
-    const started = Date.now();
-    void (async () => {
-      try {
-        const parts = await api.answer(text, history);
-        // keep the typing indicator visible for at least a beat (the local engine is instant)
-        const elapsed = Date.now() - started;
-        if (elapsed < 400) await new Promise((r) => window.setTimeout(r, 400 - elapsed));
-        setMessages((m) => [...m, { id: `m${nextId++}`, role: "assistant", ts: Date.now(), parts }]);
-      } catch {
-        setMessages((m) => [
-          ...m,
-          {
-            id: `m${nextId++}`,
-            role: "assistant",
-            ts: Date.now(),
-            parts: [{ type: "text", text: "⚠️ Could not reach the coach backend — check NEXT_PUBLIC_API_URL." }],
-          },
-        ]);
-      } finally {
-        setTyping(false);
-        scrollToBottom();
-      }
-    })();
-  };
+ // The chosen customer id drives both the local engine and remote requests.
+ const api = useMemo<CoachApi>(() => createCoachApi(customerId ?? undefined), [customerId]);
 
-  return (
-    <div className="flex h-dvh flex-col">
-      {/* header */}
-      <header className="flex items-center gap-3 border-b border-black/5 bg-white/90 px-4 py-3 backdrop-blur">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-brand-600 text-lg font-bold text-white shadow-sm">
-          S
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[15px] font-semibold text-ink">S-Coach</div>
-          <div className="text-xs text-ink/50">personal economic trainer · demo data</div>
-        </div>
-        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
-          online
-        </span>
-      </header>
+ const scrollToBottom = () => {
+ requestAnimationFrame(() => {
+ const el = scrollRef.current;
+ if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+ });
+ };
 
-      {/* messages */}
-      <div ref={scrollRef} className="chat-scroll flex-1 overflow-y-auto px-3 py-4">
-        <div className="mx-auto flex w-full max-w-phone flex-col gap-3">
-          {messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              api={api}
-              onAccountsChanged={() => setTick((t) => t + 1)}
-            />
-          ))}
-          {typing && (
-            <div className="pop-in self-start rounded-2xl rounded-bl-md bg-white px-4 py-3 shadow-sm ring-1 ring-black/5">
-              <span className="typing-dot mr-1 inline-block h-2 w-2 rounded-full bg-ink/40" />
-              <span className="typing-dot mr-1 inline-block h-2 w-2 rounded-full bg-ink/40" />
-              <span className="typing-dot inline-block h-2 w-2 rounded-full bg-ink/40" />
-            </div>
-          )}
-        </div>
-      </div>
+ const startFresh = (id: string | null) => {
+ setCustomerId(id);
+ setMessages([WELCOME]);
+ setInput("");
+ setTyping(false);
+ setShowLogin(false);
+ };
 
-      <SuggestionChips onPick={send} disabled={typing} />
+ const login = (id: string) => {
+ try {
+ window.localStorage.setItem(STORAGE_KEY, id);
+ } catch {
+ /* storage unavailable — still works for this session */
+ }
+ startFresh(id);
+ };
 
-      {/* composer */}
-      <form
-        className="border-t border-black/5 bg-white/95 px-3 py-2.5 backdrop-blur"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send(input);
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your money…"
-            enterKeyHint="send"
-            className="h-11 flex-1 rounded-full bg-[#f0f2f0] px-4 text-[15px] text-ink outline-none ring-brand-500 placeholder:text-ink/35 focus:ring-2"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim()}
-            aria-label="Send"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white shadow-sm transition enabled:hover:bg-brand-700 disabled:opacity-40"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 2 11 13" />
-              <path d="M22 2 15 22l-4-9-9-4z" />
-            </svg>
-          </button>
-        </div>
-      </form>
-    </div>
-  );
+ const logout = () => {
+ try {
+ window.localStorage.removeItem(STORAGE_KEY);
+ } catch {
+ /* ignore */
+ }
+ startFresh(null);
+ };
+
+ const send = (raw: string) => {
+ const text = raw.trim();
+ if (!text || typing) return;
+ const userMsg: ChatMessage = {
+ id: `m${nextId++}`,
+ role: "user",
+ ts: Date.now(),
+ parts: [{ type: "text", text }],
+ };
+ setMessages((m) => [...m, userMsg]);
+ setInput("");
+ setTyping(true);
+ scrollToBottom();
+ // The real backend is stateless, so send the recent transcript along.
+ const history: WireTurn[] = messages
+.filter((m) => m.id !== "welcome")
+.map((m) => ({
+ role: m.role,
+ content: m.parts
+.filter((p) => p.type === "text")
+.map((p) => (p as PartText).text)
+.join(" "),
+ }));
+ const started = Date.now();
+ void (async () => {
+ try {
+ const parts = await api.answer(text, history);
+ // keep the typing indicator visible for at least a beat (the local engine is instant)
+ const elapsed = Date.now() - started;
+ if (elapsed < 400) await new Promise((r) => window.setTimeout(r, 400 - elapsed));
+ setMessages((m) => [...m, { id: `m${nextId++}`, role: "assistant", ts: Date.now(), parts }]);
+ } catch {
+ setMessages((m) => [
+...m,
+ {
+ id: `m${nextId++}`,
+ role: "assistant",
+ ts: Date.now(),
+ parts: [{ type: "text", text: "⚠️ Could not reach the coach backend — check NEXT_PUBLIC_API_URL." }],
+ },
+ ]);
+ } finally {
+ setTyping(false);
+ scrollToBottom();
+ }
+ })();
+ };
+
+ return (
+ <div className="flex h-dvh flex-col">
+ {/* header */}
+ <header className="flex items-center gap-3 border-b border-black/5 bg-white/90 px-4 py-3 backdrop-blur">
+ <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-brand-600 text-lg font-bold text-white shadow-sm">
+ S
+ </div>
+ <div className="min-w-0 flex-1">
+ <div className="truncate text-[15px] font-semibold text-ink">S-Coach</div>
+ <div className="truncate text-xs text-ink/50">
+ {customerId ? `logged in as ${customerId}` : "personal economic trainer · demo data"}
+ </div>
+ </div>
+ {ready &&
+ (customerId ? (
+ <button
+ type="button"
+ onClick={logout}
+ className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-semibold text-brand-700 ring-1 ring-brand-200 transition hover:bg-brand-50"
+ >
+ Log out
+ </button>
+ ) : (
+ <button
+ type="button"
+ onClick={() => setShowLogin(true)}
+ className="shrink-0 rounded-full bg-brand-600 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:bg-brand-700"
+ >
+ Log in
+ </button>
+ ))}
+ </header>
+
+ {/* messages */}
+ <div ref={scrollRef} className="chat-scroll flex-1 overflow-y-auto px-3 py-4">
+ <div className="mx-auto flex w-full max-w-phone flex-col gap-3">
+ {messages.map((m) => (
+ <MessageBubble
+ key={m.id}
+ message={m}
+ api={api}
+ onAccountsChanged={() => setTick((t) => t + 1)}
+ />
+ ))}
+ {typing && (
+ <div className="pop-in self-start rounded-2xl rounded-bl-md bg-white px-4 py-3 shadow-sm ring-1 ring-black/5">
+ <span className="typing-dot mr-1 inline-block h-2 w-2 rounded-full bg-ink/40" />
+ <span className="typing-dot mr-1 inline-block h-2 w-2 rounded-full bg-ink/40" />
+ <span className="typing-dot inline-block h-2 w-2 rounded-full bg-ink/40" />
+ </div>
+ )}
+ </div>
+ </div>
+
+ <SuggestionChips onPick={send} disabled={typing} />
+
+ {/* composer */}
+ <form
+ className="border-t border-black/5 bg-white/95 px-3 py-2.5 backdrop-blur"
+ onSubmit={(e) => {
+ e.preventDefault();
+ send(input);
+ }}
+ >
+ <div className="flex items-center gap-2">
+ <input
+ value={input}
+ onChange={(e) => setInput(e.target.value)}
+ placeholder="Ask about your money…"
+ enterKeyHint="send"
+ className="h-11 flex-1 rounded-full bg-[#f0f2f0] px-4 text-[15px] text-ink outline-none ring-brand-500 placeholder:text-ink/35 focus:ring-2"
+ />
+ <button
+ type="submit"
+ disabled={!input.trim()}
+ aria-label="Send"
+ className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white shadow-sm transition enabled:hover:bg-brand-700 disabled:opacity-40"
+ >
+ <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+ <path d="M22 2 11 13" />
+ <path d="M22 2 15 22l-4-9-9-4z" />
+ </svg>
+ </button>
+ </div>
+ </form>
+
+ {showLogin && <LoginSheet onClose={() => setShowLogin(false)} onLogin={login} />}
+ </div>
+ );
+}
+
+function LoginSheet({ onClose, onLogin }: { onClose: () => void; onLogin: (id: string) => void }) {
+ const [value, setValue] = useState("");
+ const [error, setError] = useState<string | null>(null);
+
+ const submit = (raw: string) => {
+ const id = normalizeCustomerId(raw);
+ if (!id) {
+ setError("Enter a demo customer id between CUST00001 and CUST05100.");
+ return;
+ }
+ onLogin(id);
+ };
+
+ return (
+ <div
+ className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+ onClick={onClose}
+ >
+ <div
+ className="pop-in w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl"
+ onClick={(e) => e.stopPropagation()}
+ >
+ <div className="mb-1 text-lg font-bold text-ink">Log in</div>
+ <p className="mb-4 text-sm text-ink/60">
+ Pick a demo customer to see that person&apos;s own numbers. This is a hackathon demo — no real credentials.
+ </p>
+
+ <form
+ onSubmit={(e) => {
+ e.preventDefault();
+ submit(value);
+ }}
+ >
+ <input
+ autoFocus
+ value={value}
+ onChange={(e) => setValue(e.target.value)}
+ placeholder="Customer id, e.g. CUST00042"
+ className="h-12 w-full rounded-xl bg-[#f0f2f0] px-4 text-[15px] text-ink outline-none ring-brand-500 placeholder:text-ink/35 focus:ring-2"
+ />
+ {error && <div className="mt-2 text-xs font-medium text-rose-600">{error}</div>}
+ <button
+ type="submit"
+ className="mt-3 h-12 w-full rounded-xl bg-brand-600 text-[15px] font-semibold text-white shadow-sm transition hover:bg-brand-700"
+ >
+ Log in
+ </button>
+ </form>
+
+ <div className="mt-4 border-t border-black/5 pt-3">
+ <div className="mb-2 text-xs font-medium text-ink/50">Try a persona</div>
+ <div className="flex flex-wrap gap-2">
+ {DEMO_IDS.map((id) => (
+ <button
+ key={id}
+ type="button"
+ onClick={() => submit(id)}
+ className="rounded-full bg-[#f0f2f0] px-3 py-1.5 text-xs font-medium text-ink/80 ring-1 ring-black/5 transition hover:bg-brand-50"
+ >
+ {id}
+ </button>
+ ))}
+ </div>
+ </div>
+ </div>
+ </div>
+ );
 }
