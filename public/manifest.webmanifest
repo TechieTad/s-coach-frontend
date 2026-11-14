@@ -1,6 +1,6 @@
 {
   "name": "S-Coach — chat with your money",
-  "short_name": "S-Coach",
+  "short_name": "Taimi",
   "description": "Conversational AI personal economic trainer. Junction 2026 S-Bank challenge frontend demo.",
   "start_url": "/",
   "scope": "/",
