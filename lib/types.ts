@@ -91,6 +91,13 @@ export interface ChatMessage {
   ts: number; // epoch ms; 0 = hide clock
 }
 
+// ---- wire protocol for the remote FastAPI backend (POST /chat) ----
+// The backend is stateless; the UI sends the recent transcript along.
+export interface WireTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 // ---- card payloads ----
 
 export interface SafeToSpendData {

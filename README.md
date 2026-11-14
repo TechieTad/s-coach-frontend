@@ -19,9 +19,15 @@ see `lib/api.ts`.
 ```bash
 npm install        # installs next 16.4.6, react 19, tailwind 3, typescript (see package.json)
 npm run dev        # http://localhost:3000  (mobile-first; desktop shows a 430px phone frame)
-npm test           # node --test test/engine.test.ts  (no dependencies needed — Node >= 22.6 runs the TS directly)
+npm test           # node --test test/engine.test.ts test/api.test.ts  (no dependencies needed — Node >= 22.6 runs the TS directly)
 npm run build && npm start   # production PWA
 ```
+
+Optional — talk to the real FastAPI backend instead of the built-in demo engine:
+copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_API_URL` (e.g.
+`http://127.0.0.1:8000` locally, `https://<your-service>.onrender.com` deployed,
+`http://10.0.2.2:8000` from the Android emulator). If it is unset, the app
+falls back to the offline demo engine automatically. `.env*` is git-ignored.
 
 **Requirements:** Node.js **≥ 20.9.0** — Next.js 16 requires it (check with `node -v`; the Node 22 or 24 LTS line is recommended). `npm test` runs the TS tests directly on Node ≥ 22.6. After `npm install`, `npm audit` should report **0 vulnerabilities**.
 
@@ -40,8 +46,8 @@ user message ──▶ lib/api.ts CoachApi.answer() ──▶ ChatPart[]  (text 
                router + math, seeded            PartView switches on card kind and
                mock data)                       mounts the matching card component
                        │                              ▲
-   production: swap to fetch("/api/chat") ──────────────┘
-              (app/api/chat/route.ts already exposes the demo engine at POST /api/chat)
+   NEXT_PUBLIC_API_URL set: POST ${NEXT_PUBLIC_API_URL}/chat ─┘
+              (real FastAPI backend; unset → local engine, works offline)
 ```
 
 Every assistant reply is a list of **parts**: plain text (light markdown: `**bold**`,
@@ -61,25 +67,29 @@ dispatches on `part.card` to one of seven interactive components in
 
 ## The API seam (where the real backend plugs in)
 
-`lib/api.ts` exports `createCoachApi(): CoachApi` with `answer(message): Promise<ChatPart[]>`,
-`getAccounts()`, `toggleAccount(id)`. Today it wraps the local demo engine. For the real
-system, replace the body of `answer()` with:
+`lib/api.ts` exports `createCoachApi(): CoachApi` with
+`answer(message, history?): Promise<ChatPart[]>`, `getAccounts()`, `toggleAccount(id)`.
+It already speaks the **real backend's contract** when `NEXT_PUBLIC_API_URL` is set:
 
 ```ts
-async answer(message: string): Promise<ChatPart[]> {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, customer_id: "CUST00003" }),
-  });
-  return (await res.json()).parts;   // FastAPI + LLM router returns the same ChatPart[]
-}
+// POST ${NEXT_PUBLIC_API_URL}/chat        (the backend's only endpoint)
+// request : { customer_id: "CUST00003", message: string }
+//           (backend is stateless → the UI folds the last 6 turns into `message`
+//            as "User: …" / "Coach: …" lines)
+// response: { reply: string,
+//             data_context: { "Mandatory Regular": number,
+//                             "Mandatory Irregular": number, "Everyday": number },
+//             benchmark: string }
 ```
 
-The contract is exactly the MVP architecture: the LLM router classifies intent into tool
-calls (`calculate_savings`, `benchmark_spending`, `fetch_transactions`, …) and returns
-structured parts; the UI never parses free text for data. `app/api/chat/route.ts` shows
-the wire format (`{ parts: ChatPart[] }`) using the demo engine.
+`backendToParts()` maps that response onto chat parts: `reply` → text, `data_context` →
+a **BasketsCard** donut (keys mapped to the three baskets with the app's colors), and
+`benchmark` → a `📊 …` text line. HTTP errors and connection failures degrade to a
+`⚠️ …` text bubble instead of crashing. When `NEXT_PUBLIC_API_URL` is **unset**, the
+same `CoachApi` falls back to the local demo engine (`lib/engine.ts`), so the PWA works
+offline out of the box. `app/api/chat/route.ts` additionally exposes the demo engine
+server-side at `POST /api/chat` for same-origin experiments. The UI never parses free
+text for data — cards only ever come from structured parts.
 
 ## Demo data
 
@@ -117,10 +127,12 @@ outflows (covered by a dedicated test).
 
 ## Verification performed in this workspace
 
-- `node --test test/engine.test.ts` — **13/13 passing** (period math, basket split with
-  savings exclusion, safe-to-spend recomputed independently, what-if routing order,
-  benchmark peer group, multi-bank toggle/merge, transaction ordering, determinism,
-  CSV schema mirror).
+- `npm test` → `node --test test/engine.test.ts test/api.test.ts` — **16/16 passing**
+  (13 engine tests: period math, basket split with savings exclusion, safe-to-spend
+  recomputed independently, what-if routing order, benchmark peer group, multi-bank
+  toggle/merge, transaction ordering, determinism, CSV schema mirror; plus 3 API-seam
+  tests: offline fallback, `{reply, data_context, benchmark}` → parts mapper, and the
+  unreachable-backend error bubble).
 - `package.json` / `tsconfig.json` / `manifest.webmanifest` parse as valid JSON; every
   relative import in `app/ components/ lib/ test/` resolves to a real file.
 - `npm install`/`next build` could not run here (sandbox has no registry access), so the
@@ -137,7 +149,7 @@ s-coach/
 │  ├─ globals.css          Tailwind + chat/card styling
 │  └─ api/chat/route.ts    POST /api/chat → { parts } (demo engine; swap for FastAPI)
 ├─ components/
-│  ├─ ChatApp.tsx          chat state, simulated latency, typing indicator, auto-scroll
+│  ├─ ChatApp.tsx          chat state, async send() with history + error bubble, typing indicator, auto-scroll
 │  ├─ MessageBubble.tsx    text markdown + PartView dispatcher
 │  ├─ SuggestionChips.tsx  six example questions
 │  ├─ RegisterSW.tsx       service-worker registration
@@ -147,8 +159,10 @@ s-coach/
 │  ├─ format.ts            eur/pct/date helpers
 │  ├─ mockData.ts          seeded synthetic world (schema-mirroring)
 │  ├─ engine.ts            deterministic intent router + all card math (demo backend)
-│  └─ api.ts               CoachApi seam — swap answer() for fetch("/api/chat")
+│  └─ api.ts               CoachApi seam — POST ${NEXT_PUBLIC_API_URL}/chat when set, local engine otherwise
 ├─ public/                 manifest.webmanifest, sw.js, icon.svg, icon-192.png, icon-512.png
-├─ test/engine.test.ts    13 node:test tests (dependency-free)
+├─ test/engine.test.ts    13 node:test engine tests (dependency-free)
+├─ test/api.test.ts       3 node:test API-seam tests (fallback, mapper, unreachable backend)
+├─ .env.example           NEXT_PUBLIC_API_URL template (real .env* is git-ignored)
 └─ package.json / tsconfig.json / tailwind.config.ts / next.config.mjs / postcss.config.json
 ```

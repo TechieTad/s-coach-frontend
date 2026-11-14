@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createCoachApi, type CoachApi } from "@/lib/api";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, PartText, WireTurn } from "@/lib/types";
 import MessageBubble from "./MessageBubble";
 import SuggestionChips from "./SuggestionChips";
 
@@ -48,13 +48,39 @@ export default function ChatApp() {
     setInput("");
     setTyping(true);
     scrollToBottom();
-    // simulate the LLM round-trip latency of the real backend
-    window.setTimeout(() => {
-      const parts = api.answer(text);
-      setMessages((m) => [...m, { id: `m${nextId++}`, role: "assistant", ts: Date.now(), parts }]);
-      setTyping(false);
-      scrollToBottom();
-    }, 450 + Math.min(600, text.length * 8));
+    // The real backend is stateless, so send the recent transcript along.
+    const history: WireTurn[] = messages
+      .filter((m) => m.id !== "welcome")
+      .map((m) => ({
+        role: m.role,
+        content: m.parts
+          .filter((p) => p.type === "text")
+          .map((p) => (p as PartText).text)
+          .join(" "),
+      }));
+    const started = Date.now();
+    void (async () => {
+      try {
+        const parts = await api.answer(text, history);
+        // keep the typing indicator visible for at least a beat (the local engine is instant)
+        const elapsed = Date.now() - started;
+        if (elapsed < 400) await new Promise((r) => window.setTimeout(r, 400 - elapsed));
+        setMessages((m) => [...m, { id: `m${nextId++}`, role: "assistant", ts: Date.now(), parts }]);
+      } catch {
+        setMessages((m) => [
+          ...m,
+          {
+            id: `m${nextId++}`,
+            role: "assistant",
+            ts: Date.now(),
+            parts: [{ type: "text", text: "⚠️ Could not reach the coach backend — check NEXT_PUBLIC_API_URL." }],
+          },
+        ]);
+      } finally {
+        setTyping(false);
+        scrollToBottom();
+      }
+    })();
   };
 
   return (

@@ -1,5 +1,5 @@
 // S-Coach service worker: cache-first for the app shell, network-first for the API.
-const CACHE = "s-coach-v1";
+const CACHE = "s-coach-v2"; // bump on every release so clients pick up the new shell
 const SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (e) => {
