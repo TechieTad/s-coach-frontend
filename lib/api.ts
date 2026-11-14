@@ -66,33 +66,42 @@ export function createCoachApi(): CoachApi {
   const engine = new CoachEngine();
   const base = apiBase();
 
-  const answerRemote = async (message: string, history?: WireTurn[]): Promise<ChatPart[]> => {
-    // the backend is stateless → fold the last few turns into the message string
-    const transcript = (history ?? [])
-      .slice(-6)
-      .map((t) => `${t.role === "user" ? "User" : "Coach"}: ${t.content}`)
-      .join("\n");
-    const wire = transcript ? `${transcript}\nUser: ${message}` : message;
-    try {
-      const res = await fetch(`${base}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer_id: CUSTOMER.customer_id, message: wire }),
-      });
-      if (!res.ok) {
-        const hint = res.status === 404 ? `unknown customer_id "${CUSTOMER.customer_id}"` : `HTTP ${res.status}`;
-        return [{ type: "text", text: `⚠️ Coach backend answered with an error (${hint}) at ${base}.` }];
-      }
-      return backendToParts((await res.json()) as ChatResponse);
-    } catch {
-      return [
-        {
-          type: "text",
-          text: `⚠️ Could not reach the coach backend at ${base} — check NEXT_PUBLIC_API_URL (and that the backend is running).`,
-        },
-      ];
+ const answerRemote = async (message: string, history?: WireTurn[]): Promise<ChatPart[]> => {
+  // 1. Map the frontend history directly into the array the backend expects
+  const conversationArray = (history ?? []).map((t) => ({
+    role: t.role === "user" ? "user" : "assistant",
+    content: t.content
+  }));
+  
+  // 2. Append the user's newest message
+  conversationArray.push({ role: "user", content: message });
+  
+  try {
+    const res = await fetch(`${base}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // 3. Send the 'conversation' array instead of the 'message' string
+      body: JSON.stringify({ 
+        customer_id: CUSTOMER.customer_id, 
+        conversation: conversationArray 
+      }),
+    });
+    if (!res.ok) {
+      const hint = res.status === 404 ? `unknown customer_id "${CUSTOMER.customer_id}"` : `HTTP ${res.status}`;
+      return [{ type: "text", text: `⚠️ Coach backend answered with an error (${hint}) at ${base}.` }];
     }
-  };
+    return backendToParts((await res.json()) as ChatResponse);
+  } catch {
+    return [
+      {
+        type: "text",
+        text: `⚠️ Could not reach the coach backend at ${base} — check NEXT_PUBLIC_API_URL.`,
+      },
+    ];
+  }
+};
+
+
 
   return {
     answer: (m, h) => (base ? answerRemote(m, h) : Promise.resolve(engine.answer(m))),
