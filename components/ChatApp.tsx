@@ -278,3 +278,72 @@ export default function ChatApp() {
     </div>
   );
 }
+
+function LoginSheet({ onClose, onLogin }: { onClose: () => void; onLogin: (id: string) => void }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (raw: string) => {
+    const id = normalizeCustomerId(raw);
+    if (!id) {
+      setError("Enter a demo customer id between CUST00001 and CUST05100.");
+      return;
+    }
+    onLogin(id);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="pop-in w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 text-lg font-bold text-ink">Log in</div>
+        <p className="mb-4 text-sm text-ink/60">
+          Pick a demo customer to see that person&apos;s own numbers. This is a hackathon demo — no real credentials.
+        </p>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit(value);
+          }}
+        >
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Customer id, e.g. CUST00042"
+            className="h-12 w-full rounded-xl bg-[#f0f2f0] px-4 text-[15px] text-ink outline-none ring-brand-500 placeholder:text-ink/35 focus:ring-2"
+          />
+          {error && <div className="mt-2 text-xs font-medium text-rose-600">{error}</div>}
+          <button
+            type="submit"
+            className="mt-3 h-12 w-full rounded-xl bg-brand-600 text-[15px] font-semibold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            Log in
+          </button>
+        </form>
+
+        <div className="mt-4 border-t border-black/5 pt-3">
+          <div className="mb-2 text-xs font-medium text-ink/50">Try a persona</div>
+          <div className="flex flex-wrap gap-2">
+            {DEMO_IDS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => submit(id)}
+                className="rounded-full bg-[#f0f2f0] px-3 py-1.5 text-xs font-medium text-ink/80 ring-1 ring-black/5 transition hover:bg-brand-50"
+              >
+                {id}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
